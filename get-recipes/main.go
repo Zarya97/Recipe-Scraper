@@ -20,6 +20,20 @@ import (
 
 import ("github.com/PuerkitoBio/goquery")
 
+
+type Nutrition struct {
+	name string
+	amount int
+	unit string
+}
+
+type Time struct {
+	prep int
+	inactive int
+	cook int
+	total int
+}
+
 // A structure for each recipe.
 type Recipe struct {
 	id string
@@ -28,13 +42,13 @@ type Recipe struct {
 	author string
 	description string
 	level string
-	totalTime int
-	prepTime int
-	inactiveTime int
-	cookTime int
+	imageUrl string
+	time Time
 	yield string
 	ingredients []string
 	directions []string
+	nutrition []Nutrition
+	tags []string
 }
 
 //
@@ -200,6 +214,26 @@ func getRecipeLevel(doc *goquery.Document) string {
 	return level
 }
 
+// Get the image URL of the recipe
+func getRecipeImageUrl(doc *goquery.Document) string {
+  var imageUrl string
+
+  // Find the image element with the desired class
+  img := doc.Find("div[class=m-MediaBlock__m-MediaWrap]").Children().First()
+
+  imageUrl, _ = img.Attr("src")
+	cleanUrl := imageUrl[2:]
+
+	pos := strings.LastIndex(cleanUrl, "/") + 1
+  lastPart := cleanUrl[pos:]
+	if lastPart == "1474463768097.jpeg" {
+		return ""
+	}
+
+  return cleanUrl
+}
+
+
 // Get the recipie's total time
 func getRecipeTotalTime(doc *goquery.Document) string {
 	time := doc.Find("ul[class=o-RecipeInfo__m-Level]").First().Text()
@@ -256,6 +290,39 @@ func getRecipeYeild(doc *goquery.Document) string {
 	return yield
 }
 
+// Gets the recipe nutrition and returns it as an array of Nutrition structs
+func getRecipeNutrition(doc *goquery.Document) []Nutrition {
+	nutrition := []Nutrition{}
+
+	doc.Find("dl[class=m-NutritionTable__a-Content] dt").Each(func(index int, dt *goquery.Selection) {
+		// Find the corresponding dd element
+		dd := dt.Next()
+
+		// Initialize a new Nutrition item
+		nutritionItem := Nutrition{}
+
+		// Set the name in the Nutrition item
+		nutritionItem.name = strings.TrimSpace(dt.Text())
+
+		// Parse the amount and unit and set them in the Nutrition item
+		text := strings.TrimSpace(dd.Text())
+		parts := strings.SplitN(text, " ", 2)
+		if len(parts) == 2 {
+			nutritionItem.amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.unit = parts[1]
+		}
+		if len(parts) == 1 {
+			nutritionItem.amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.unit = ""
+		}
+
+		// Append the Nutrition item to the slice
+		nutrition = append(nutrition, nutritionItem)
+	})
+
+	return nutrition
+}
+
 // Gets the recipe ingredients and returns them as an array of (large) strings
 func getRecipeIngredients(doc *goquery.Document) []string {
 
@@ -293,6 +360,21 @@ func getRecipeDirections(doc *goquery.Document) []string {
 	return directions
 }
 
+func getRecipeTags(doc *goquery.Document) []string {
+	tags := []string{}
+
+	// Updated selector to include all classes
+	body := doc.Find("div.o-Capsule__m-TagList.m-TagList a")
+
+	body.Each(func(index int, element *goquery.Selection) {
+		tag := strings.TrimSpace(element.Text())
+		tags = append(tags, tag)
+	})
+	return tags
+}
+
+
+
 //
 // Collecting, storing, writing the recipes, etc.
 //
@@ -315,23 +397,31 @@ func collectRecipe(recipeObj *Recipe, url string) *Recipe {
 	recipeObj.author = getRecipeAuthor(doc)
 	recipeObj.description = getRecipeDescription(doc)
 	recipeObj.level = getRecipeLevel(doc)
+	recipeObj.imageUrl = getRecipeImageUrl(doc)
 
 	// Get times
-	recipeObj.totalTime = extractStringTime(getRecipeTotalTime(doc))
+	recipeObj.time.total = extractStringTime(getRecipeTotalTime(doc))
 
 	prep, inactive, cook := getRecipeOtherTime(doc)
-	recipeObj.prepTime = extractStringTime(prep)
-	recipeObj.inactiveTime = extractStringTime(inactive)
-	recipeObj.cookTime = extractStringTime(cook)
+	recipeObj.time.prep = extractStringTime(prep)
+	recipeObj.time.inactive = extractStringTime(inactive)
+	recipeObj.time.cook = extractStringTime(cook)
 
 	// Yeild
 	recipeObj.yield = getRecipeYeild(doc)
+
+	// Nutrition
+	recipeObj.nutrition = getRecipeNutrition(doc)
 
 	// Ingredients
 	recipeObj.ingredients = getRecipeIngredients(doc)
 
 	// Directions
 	recipeObj.directions = getRecipeDirections(doc)
+
+	// Tags
+	recipeObj.tags = getRecipeTags(doc)
+	log.Println("Tags:", recipeObj.tags)
 
 	log.Printf("Successfully collected recipe %s (%s)", recipeObj.title, recipeObj.id)
 
@@ -371,7 +461,7 @@ func writerRoutine(c chan Recipe) {
 			log.Fatal(err)
 		}
 		defer file.Close()
-		file.WriteString("id\turl\ttitle\tauthor\tdescription\tlevel\ttotalTime\tprepTime\tinactiveTime\tcookTime\tyield\tingredients\tdirections\n")
+		file.WriteString("id\turl\ttitle\tauthor\tdescription\tlevel\timageUrl\ttotalTime\tprepTime\tinactiveTime\tcookTime\tyield\tingredients\tdirections\n")
 	  }
 
 	// If the file doesn't exist, create it, or append to the file
@@ -385,22 +475,25 @@ func writerRoutine(c chan Recipe) {
 		select {
 		case recipe := <- c:
 			// Convert the ingredients and directions into strings
-			ingredients := strings.ReplaceAll(strings.Join(recipe.ingredients, "__"), "\n", "")
-			directions := strings.ReplaceAll(strings.Join(recipe.directions, "__"), "\n", "")
+			ingredients := strings.ReplaceAll(strings.Join(recipe.ingredients, "___"), "\n", "")
+			directions := strings.ReplaceAll(strings.Join(recipe.directions, "___"), "\n", "")
+			tags := strings.ReplaceAll(strings.Join(recipe.tags, "___"), "\n", "")
 
-			writeString := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\n",  recipe.id,
+			writeString := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",  recipe.id,
 																					recipe.url,
 																					recipe.title,
 																					recipe.author,
 																					recipe.description,
 																					recipe.level,
-																					recipe.totalTime,
-																					recipe.prepTime,
-																					recipe.inactiveTime,
-																					recipe.cookTime,
+																					recipe.imageUrl,
+																					recipe.time.total,
+																					recipe.time.prep,
+																					recipe.time.inactive,
+																					recipe.time.cook,
 																					recipe.yield,
 																					ingredients,
-																					directions)
+																					directions,
+																					tags)
 
 			f.WriteString(writeString)
 
