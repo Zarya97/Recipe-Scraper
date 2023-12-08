@@ -7,6 +7,7 @@ package main
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,39 +17,39 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-import ("github.com/PuerkitoBio/goquery")
+	"github.com/PuerkitoBio/goquery"
+)
 
 
 type Nutrition struct {
-	name string
-	amount int
-	unit string
+	Name string `json:"name"`
+	Amount int `json:"amount"`
+	Unit string `json:"unit"`
 }
 
 type Time struct {
-	prep int
-	inactive int
-	cook int
-	total int
+	Prep int `json:"prep"`
+	Inactive int `json:"inactive"`
+	Cook int `json:"cook"`
+	Total int `json:"total"`
 }
 
 // A structure for each recipe.
 type Recipe struct {
-	id string
-	url string
-	title string
-	author string
-	description string
-	level string
-	imageUrl string
-	time Time
-	yield string
-	ingredients []string
-	directions []string
-	nutrition []Nutrition
-	tags []string
+	Id string `json:"id"`
+	Url string `json:"url"`
+	Title string `json:"title"`
+	Author string `json:"author"`
+	Description string `json:"description"`
+	Level string `json:"level"`
+	ImageUrl string `json:"imageUrl"`
+	Time Time `json:"time"`
+	Yield string `json:"yield"`
+	Ingredients []string `json:"ingredients"`
+	Directions []string `json:"directions"`
+	Nutrition []Nutrition `json:"nutrition"`
+	Tags []string `json:"tags"`
 }
 
 //
@@ -302,18 +303,18 @@ func getRecipeNutrition(doc *goquery.Document) []Nutrition {
 		nutritionItem := Nutrition{}
 
 		// Set the name in the Nutrition item
-		nutritionItem.name = strings.TrimSpace(dt.Text())
+		nutritionItem.Name = strings.TrimSpace(dt.Text())
 
 		// Parse the amount and unit and set them in the Nutrition item
 		text := strings.TrimSpace(dd.Text())
 		parts := strings.SplitN(text, " ", 2)
 		if len(parts) == 2 {
-			nutritionItem.amount, _ = strconv.Atoi(parts[0])
-			nutritionItem.unit = parts[1]
+			nutritionItem.Amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.Unit = parts[1]
 		}
 		if len(parts) == 1 {
-			nutritionItem.amount, _ = strconv.Atoi(parts[0])
-			nutritionItem.unit = ""
+			nutritionItem.Amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.Unit = ""
 		}
 
 		// Append the Nutrition item to the slice
@@ -384,8 +385,8 @@ func getRecipeTags(doc *goquery.Document) []string {
 func collectRecipe(recipeObj *Recipe, url string) *Recipe {
 
 	// Set what we can set immediately
-	recipeObj.id = hashString(url)
-	recipeObj.url = url
+	recipeObj.Id = hashString(url)
+	recipeObj.Url = url
 
 	log.Println("Fetching recipe at", url)
 
@@ -393,37 +394,36 @@ func collectRecipe(recipeObj *Recipe, url string) *Recipe {
 	doc := getUrlContent(url)
 
 	// Get recipe title, author, etc
-	recipeObj.title = getRecipeTitle(doc)
-	recipeObj.author = getRecipeAuthor(doc)
-	recipeObj.description = getRecipeDescription(doc)
-	recipeObj.level = getRecipeLevel(doc)
-	recipeObj.imageUrl = getRecipeImageUrl(doc)
+	recipeObj.Title = getRecipeTitle(doc)
+	recipeObj.Author = getRecipeAuthor(doc)
+	recipeObj.Description = getRecipeDescription(doc)
+	recipeObj.Level = getRecipeLevel(doc)
+	recipeObj.ImageUrl = getRecipeImageUrl(doc)
 
 	// Get times
-	recipeObj.time.total = extractStringTime(getRecipeTotalTime(doc))
+	recipeObj.Time.Total = extractStringTime(getRecipeTotalTime(doc))
 
 	prep, inactive, cook := getRecipeOtherTime(doc)
-	recipeObj.time.prep = extractStringTime(prep)
-	recipeObj.time.inactive = extractStringTime(inactive)
-	recipeObj.time.cook = extractStringTime(cook)
+	recipeObj.Time.Prep = extractStringTime(prep)
+	recipeObj.Time.Inactive = extractStringTime(inactive)
+	recipeObj.Time.Cook = extractStringTime(cook)
 
 	// Yeild
-	recipeObj.yield = getRecipeYeild(doc)
+	recipeObj.Yield = getRecipeYeild(doc)
 
 	// Nutrition
-	recipeObj.nutrition = getRecipeNutrition(doc)
+	recipeObj.Nutrition = getRecipeNutrition(doc)
 
 	// Ingredients
-	recipeObj.ingredients = getRecipeIngredients(doc)
+	recipeObj.Ingredients = getRecipeIngredients(doc)
 
 	// Directions
-	recipeObj.directions = getRecipeDirections(doc)
+	recipeObj.Directions = getRecipeDirections(doc)
 
 	// Tags
-	recipeObj.tags = getRecipeTags(doc)
-	log.Println("Tags:", recipeObj.tags)
+	recipeObj.Tags = getRecipeTags(doc)
 
-	log.Printf("Successfully collected recipe %s (%s)", recipeObj.title, recipeObj.id)
+	log.Printf("Successfully collected recipe %s (%s)", recipeObj.Title, recipeObj.Id)
 
 	return recipeObj
 
@@ -449,14 +449,22 @@ func recipeRoutine(recipeObj *Recipe, url string, wg *sync.WaitGroup, c chan Rec
 	
 }
 
+func (r *Recipe) ToJSON() (string, error) {
+	jsonData, err := json.MarshalIndent(r, "", "    ")
+	if err != nil {
+		return "", err
+	}
+	return string(jsonData), nil
+}
+
 // Routine for writing to the file. Only one is spun up so as to avoid using a
 // MutEx for a file.
 func writerRoutine(c chan Recipe) {
 
 	// First let us check if the file exists
-	if _, err := os.Stat("./recipes.tsv"); os.IsNotExist(err) {
+	if _, err := os.Stat("./recipes.json"); os.IsNotExist(err) {
 
-		file, err := os.Create("./recipes.tsv")
+		file, err := os.Create("./recipes.json")
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -465,7 +473,7 @@ func writerRoutine(c chan Recipe) {
 	  }
 
 	// If the file doesn't exist, create it, or append to the file
-	f, err := os.OpenFile("./recipes.tsv", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile("./recipes.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	defer f.Close()
 	if err != nil {
 		log.Fatal("Error trying to open the output file", err)
@@ -475,11 +483,15 @@ func writerRoutine(c chan Recipe) {
 		select {
 		case recipe := <- c:
 			// Convert the ingredients and directions into strings
-			ingredients := strings.ReplaceAll(strings.Join(recipe.ingredients, "___"), "\n", "")
-			directions := strings.ReplaceAll(strings.Join(recipe.directions, "___"), "\n", "")
-			tags := strings.ReplaceAll(strings.Join(recipe.tags, "___"), "\n", "")
+			ingredients := strings.ReplaceAll(strings.Join(recipe.Ingredients, "___"), "\n", "")
+			directions := strings.ReplaceAll(strings.Join(recipe.Directions, "___"), "\n", "")
+			tags := strings.ReplaceAll(strings.Join(recipe.Tags, ","), "\n", "")
 
-			writeString := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",  recipe.id,
+			recipe.Ingredients = []string{ingredients}
+			recipe.Directions = []string{directions}
+			recipe.Tags = []string{tags}
+
+			/*writeString := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",  recipe.id,
 																					recipe.url,
 																					recipe.title,
 																					recipe.author,
@@ -494,8 +506,16 @@ func writerRoutine(c chan Recipe) {
 																					ingredients,
 																					directions,
 																					tags)
+				*/																	
 
-			f.WriteString(writeString)
+				jsonData, err := recipe.ToJSON()
+				if err != nil {
+					log.Println("Error converting recipe to JSON", err)
+				}
+	
+				// Write the JSON data to the file
+				log.Print(jsonData)
+				f.WriteString(jsonData + "\n")
 
 		default:
 			log.Println("No recipes in channel, waiting 2 seconds.")
