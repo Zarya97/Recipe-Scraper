@@ -28,11 +28,24 @@ type Nutrition struct {
 	Unit string `json:"unit"`
 }
 
+
 type Time struct {
 	Prep int `json:"prep"`
-	Inactive int `json:"inactive"`
+	Active int `json:"active"`
 	Cook int `json:"cook"`
 	Total int `json:"total"`
+}
+
+type Instruction struct {
+	Step string `json:"step"`
+}
+
+type Ingredient struct {
+	Name string `json:"name"`
+}
+
+type Tag struct {
+	Tag string `json:"tag"`
 }
 
 // A structure for each recipe.
@@ -46,10 +59,10 @@ type Recipe struct {
 	ImageUrl string `json:"imageUrl"`
 	Time Time `json:"time"`
 	Yield string `json:"yield"`
-	Ingredients []string `json:"ingredients"`
-	Directions []string `json:"directions"`
+	Ingredients []Ingredient `json:"ingredients"`
+	Instructions []Instruction `json:"instructions"`
 	Nutrition []Nutrition `json:"nutrition"`
-	Tags []string `json:"tags"`
+	Tags []Tag `json:"tags"`
 }
 
 //
@@ -101,8 +114,12 @@ func cleanString(s string) string {
 	return cleanString
 }
 
-// Extracts string time to time and returns an int value - ex: 1hr 55min -> 115
 func extractStringTime(time string) int {
+	// Remove square brackets and extra spaces
+	time = strings.ReplaceAll(time, "[", "")
+	time = strings.ReplaceAll(time, "]", "")
+	time = strings.TrimSpace(time)
+
 	times := strings.Split(time, " ")
 	totalMinutes := 0
 
@@ -122,14 +139,14 @@ func extractStringTime(time string) int {
 		return rtrTime
 	}
 
-	if len(times) % 2 != 0 {
+	if len(times)%2 != 0 {
 		log.Println("Invalid time string - uneven length greater than 1:", times)
 		return -1
 	}
 
 	for s := range times {
 
-		if s == len(times) - 1 {
+		if s == len(times)-1 {
 			continue
 		}
 
@@ -155,6 +172,7 @@ func extractStringTime(time string) int {
 
 	return totalMinutes
 }
+
 
 //
 // Fetching the HTML
@@ -223,7 +241,10 @@ func getRecipeImageUrl(doc *goquery.Document) string {
   img := doc.Find("div[class=m-MediaBlock__m-MediaWrap]").Children().First()
 
   imageUrl, _ = img.Attr("src")
-	cleanUrl := imageUrl[2:]
+	cleanUrl := imageUrl
+	if len(imageUrl) > 3 {
+		cleanUrl = imageUrl[2:]
+	}
 
 	pos := strings.LastIndex(cleanUrl, "/") + 1
   lastPart := cleanUrl[pos:]
@@ -234,54 +255,37 @@ func getRecipeImageUrl(doc *goquery.Document) string {
   return cleanUrl
 }
 
-
-// Get the recipie's total time
-func getRecipeTotalTime(doc *goquery.Document) string {
-	time := doc.Find("ul[class=o-RecipeInfo__m-Level]").First().Text()
-	time = strings.TrimSpace(time) // It returns nothing if we do not call this here... why?
-	timeSplit := strings.Split(time, "\n")
-	time = timeSplit[len(timeSplit)-1]
-	time = strings.TrimSpace(time)
-	return time
-}
-
-// Grabs all of the Prep/Inactive/Cook times for the recipe since they are all
-// In one ul element. Returns prepTime, inactiveTime, cookTime as strings
-func getRecipeOtherTime(doc *goquery.Document) (string, string, string) {
-
-	times := []string{}
+func getRecipeTimes(doc *goquery.Document) (string, string, string, string) {
 	prepTime := ""
-	inactiveTime := ""
+	activeTime := ""
 	cookTime := ""
-	
-	doc.Find("ul[class=o-RecipeInfo__m-Time] li").Each(func(index int, element *goquery.Selection) {
-		time := strings.TrimSpace(element.Text())
-
-		// This is needed because between the label and time value on the page there is
-		// one new line and 10 spaces of whitespace
-		time = strings.ReplaceAll(time, "           ", "")
-		time = strings.ReplaceAll(time, "\n", "")
-
-		times = append(times, time)
+	totalTime := ""
+	doc.Find("ul.o-RecipeInfo__m-Time").Children().Each(func(index int, element *goquery.Selection) {
+		headline := strings.TrimSpace(element.Text())
+		if strings.Contains(headline, "Prep:") {
+			prepTime = strings.Split(strings.TrimSpace(element.Text()), ":")[1]
+			//prepTime = strings.Replace(strings.TrimSpace(prep), " ", " ", -1)
+		} else if strings.Contains(headline, "Active:") {
+			activeTime = strings.Split(strings.TrimSpace(element.Text()), ":")[1]
+			//activeTime = strings.Replace(strings.TrimSpace(active), " ", " ", -1)
+		} else if strings.Contains(headline, "Cook:") {
+			cookTime = strings.Split(strings.TrimSpace(element.Text()), ":")[1]
+			//cookTime = strings.Replace(strings.TrimSpace(cook), " ", " ", -1)
+		} else if strings.Contains(headline, "Total:") {
+			totalTime = strings.Split(strings.TrimSpace(element.Text()), ":")[1]
+			//totalTime = strings.Replace(strings.TrimSpace(total), " ", " ", -1)
+		}
 	})
-	
-	for t := range times {
-		splitLine := strings.Split(times[t], ":")
 
-		if splitLine[0] == "Prep" {
-			prepTime = splitLine[1]
+	doc.Find("ul.o-RecipeInfo__m-Level").Children().Each(func(index int, element *goquery.Selection) {
+		headline := strings.TrimSpace(element.Text())
+		if strings.Contains(headline, "Total:") {
+			totalTime = strings.Split(strings.TrimSpace(element.Text()), ":")[1]
+			//totalTime = strings.Replace(strings.TrimSpace(total), " ", "", -1)
 		}
+	})
 
-		if splitLine[0] == "Inactive" {
-			inactiveTime = splitLine[1]
-		}
-
-		if splitLine[0] == "Cook" {
-			cookTime = splitLine[1]
-		}
-	}
-
-	return prepTime, inactiveTime, cookTime
+	return prepTime, activeTime, cookTime, totalTime
 }
 
 // Gets the yeild and returns it as a string
@@ -309,11 +313,11 @@ func getRecipeNutrition(doc *goquery.Document) []Nutrition {
 		text := strings.TrimSpace(dd.Text())
 		parts := strings.SplitN(text, " ", 2)
 		if len(parts) == 2 {
-			nutritionItem.Amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.Amount, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
 			nutritionItem.Unit = parts[1]
 		}
 		if len(parts) == 1 {
-			nutritionItem.Amount, _ = strconv.Atoi(parts[0])
+			nutritionItem.Amount, _ = strconv.Atoi(strings.TrimSpace(parts[0]))
 			nutritionItem.Unit = ""
 		}
 
@@ -325,23 +329,24 @@ func getRecipeNutrition(doc *goquery.Document) []Nutrition {
 }
 
 // Gets the recipe ingredients and returns them as an array of (large) strings
-func getRecipeIngredients(doc *goquery.Document) []string {
+func getRecipeIngredients(doc *goquery.Document) []Ingredient {
 
-	ingredients := []string{}
+	ingredients := []Ingredient{}
 
 	doc.Find("div[class=o-Ingredients__m-Body] p").Each(func(index int, element *goquery.Selection) {
-		ingredient := strings.TrimSpace(element.Text())
+		ingredient := Ingredient{}
+		ingredient.Name = strings.TrimSpace(element.Text())
 		ingredients = append(ingredients, ingredient)
 	
 	})
 
 	if len(ingredients) < 1 {
-		ingredients = []string{""}
+		ingredients = []Ingredient{}
 		return ingredients
 	}
 
 	// If we grab the select item, just remove it from the slice
-	if ingredients[0] == "Deselect All" || ingredients[0] == "Select All" {
+	if ingredients[0].Name == "Deselect All" || ingredients[0].Name == "Select All" {
 		ingredients = ingredients[1:]
 	}
 
@@ -349,26 +354,27 @@ func getRecipeIngredients(doc *goquery.Document) []string {
 }
 
 // Gets the recipe directions and returns them as an array of (large) strings
-func getRecipeDirections(doc *goquery.Document) []string {
+func getRecipeInstructions(doc *goquery.Document) []Instruction {
 
-	directions := []string{}
+	instructions := []Instruction{}
 
 	doc.Find("li[class=o-Method__m-Step]").Each(func(index int, element *goquery.Selection) {
-		direction := strings.TrimSpace(element.Text())
-		directions = append(directions, direction)
+		instruction := Instruction{}
+		instruction.Step = strings.TrimSpace(element.Text())
+		instructions = append(instructions, instruction)
 	
 	})
-	return directions
+	return instructions
 }
 
-func getRecipeTags(doc *goquery.Document) []string {
-	tags := []string{}
+func getRecipeTags(doc *goquery.Document) []Tag {
+	tags := []Tag{}
 
 	// Updated selector to include all classes
 	body := doc.Find("div.o-Capsule__m-TagList.m-TagList a")
-
 	body.Each(func(index int, element *goquery.Selection) {
-		tag := strings.TrimSpace(element.Text())
+		tag := Tag{}
+		tag.Tag = strings.TrimSpace(element.Text())
 		tags = append(tags, tag)
 	})
 	return tags
@@ -400,13 +406,11 @@ func collectRecipe(recipeObj *Recipe, url string) *Recipe {
 	recipeObj.Level = getRecipeLevel(doc)
 	recipeObj.ImageUrl = getRecipeImageUrl(doc)
 
-	// Get times
-	recipeObj.Time.Total = extractStringTime(getRecipeTotalTime(doc))
-
-	prep, inactive, cook := getRecipeOtherTime(doc)
+	prep, active, cook, total := getRecipeTimes(doc)
 	recipeObj.Time.Prep = extractStringTime(prep)
-	recipeObj.Time.Inactive = extractStringTime(inactive)
+	recipeObj.Time.Active = extractStringTime(active)
 	recipeObj.Time.Cook = extractStringTime(cook)
+	recipeObj.Time.Total = extractStringTime(total)
 
 	// Yeild
 	recipeObj.Yield = getRecipeYeild(doc)
@@ -418,10 +422,12 @@ func collectRecipe(recipeObj *Recipe, url string) *Recipe {
 	recipeObj.Ingredients = getRecipeIngredients(doc)
 
 	// Directions
-	recipeObj.Directions = getRecipeDirections(doc)
+	recipeObj.Instructions = getRecipeInstructions(doc)
 
 	// Tags
 	recipeObj.Tags = getRecipeTags(doc)
+
+	getRecipeTimes(doc)
 
 	log.Printf("Successfully collected recipe %s (%s)", recipeObj.Title, recipeObj.Id)
 
@@ -460,69 +466,48 @@ func (r *Recipe) ToJSON() (string, error) {
 // Routine for writing to the file. Only one is spun up so as to avoid using a
 // MutEx for a file.
 func writerRoutine(c chan Recipe) {
-
-	// First let us check if the file exists
-	if _, err := os.Stat("./recipes.json"); os.IsNotExist(err) {
-
-		file, err := os.Create("./recipes.json")
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer file.Close()
-		file.WriteString("id\turl\ttitle\tauthor\tdescription\tlevel\timageUrl\ttotalTime\tprepTime\tinactiveTime\tcookTime\tyield\tingredients\tdirections\n")
-	  }
-
-	// If the file doesn't exist, create it, or append to the file
+	// Open the file for writing or create it if it doesn't exist
 	f, err := os.OpenFile("./recipes.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	defer f.Close()
 	if err != nil {
 		log.Fatal("Error trying to open the output file", err)
 	}
 
+	// Write the opening bracket for the JSON array
+	f.WriteString("[")
+
+	firstRecipe := true // Flag to determine if it's the first recipe
+
 	for {
 		select {
-		case recipe := <- c:
-			// Convert the ingredients and directions into strings
-			ingredients := strings.ReplaceAll(strings.Join(recipe.Ingredients, "___"), "\n", "")
-			directions := strings.ReplaceAll(strings.Join(recipe.Directions, "___"), "\n", "")
-			tags := strings.ReplaceAll(strings.Join(recipe.Tags, ","), "\n", "")
+		case recipe := <-c:
 
-			recipe.Ingredients = []string{ingredients}
-			recipe.Directions = []string{directions}
-			recipe.Tags = []string{tags}
+			// Convert the recipe to JSON
+			jsonData, err := recipe.ToJSON()
+			if err != nil {
+				log.Println("Error converting recipe to JSON", err)
+				continue
+			}
 
-			/*writeString := fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\n",  recipe.id,
-																					recipe.url,
-																					recipe.title,
-																					recipe.author,
-																					recipe.description,
-																					recipe.level,
-																					recipe.imageUrl,
-																					recipe.time.total,
-																					recipe.time.prep,
-																					recipe.time.inactive,
-																					recipe.time.cook,
-																					recipe.yield,
-																					ingredients,
-																					directions,
-																					tags)
-				*/																	
+			// Add a comma before writing the JSON data (except for the first recipe)
+			if !firstRecipe {
+				f.WriteString(",")
+				f.WriteString("\n")
+			}
 
-				jsonData, err := recipe.ToJSON()
-				if err != nil {
-					log.Println("Error converting recipe to JSON", err)
-				}
-	
-				// Write the JSON data to the file
-				log.Print(jsonData)
-				f.WriteString(jsonData + "\n")
+			// Write the JSON data to the file
+			f.WriteString(jsonData)
+
+			firstRecipe = false // Update the flag after writing the first recipe
 
 		default:
 			log.Println("No recipes in channel, waiting 2 seconds.")
 			time.Sleep(2 * time.Second)
 		}
-	} 
+	}
+
 }
+
 
 
 //
@@ -572,12 +557,13 @@ func main() {
 		}
 	}
 
-	// Wait until all goroutines using wg are done.
+	// Wait until all go routines using wg are done.
 	wg.Wait()
 
 	log.Println("All recipe routines have finished. Waiting 5 seconds for writer routine.")
 	time.Sleep(5 * time.Second)
 	log.Println("Closing recipe routine channel.")
+
 	close(c)
 
 	// Indicate to the user that we are done and are going to take a nap now.
